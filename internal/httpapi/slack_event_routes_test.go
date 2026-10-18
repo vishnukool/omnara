@@ -62,6 +62,24 @@ func TestSlackEventsURLVerificationDoesNotRequireInstall(t *testing.T) {
 	}
 }
 
+func TestSlackEventsRejectEventsWithoutInstallIdentity(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing team":   `{"type":"event_callback","api_app_id":"A1","event_id":"Ev1","event":{"type":"app_mention"}}`,
+		"missing app":    `{"type":"event_callback","team_id":"T1","event_id":"Ev1","event":{"type":"app_mention"}}`,
+		"missing both":   `{"type":"event_callback","event_id":"Ev1","event":{"type":"app_mention"}}`,
+		"empty envelope": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := &Server{}
+			recorder := httptest.NewRecorder()
+			server.slackEventsRoute(recorder, httptest.NewRequest(http.MethodPost, slackEventsPath, strings.NewReader(body)))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestSlackShouldFetchRecentContext(t *testing.T) {
 	tests := []struct {
 		name        string
