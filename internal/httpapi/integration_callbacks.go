@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/omnara-ai/omnara/internal/httpapi/apierror"
@@ -29,13 +31,20 @@ func readIntegrationCallbackBody(
 		_ = controller.SetReadDeadline(time.Time{})
 		return raw, true
 	}
+	_ = controller.SetReadDeadline(time.Now())
 	w.Header().Set("Connection", "close")
 	var tooLarge *http.MaxBytesError
-	if err == nil || errors.As(err, &tooLarge) {
+	var timeout net.Error
+	switch {
+	case err == nil || errors.As(err, &tooLarge):
+		logpkg.Error(r.Context(), errors.New("read integration callback body: request body too large"))
 		apierror.Write(w, openapi.ErrorCodeRequestTooLarge)
 		return nil, false
+	case errors.As(err, &timeout) && timeout.Timeout():
+		logpkg.Error(r.Context(), fmt.Errorf("read integration callback body: %w", os.ErrDeadlineExceeded))
+	default:
+		logpkg.Error(r.Context(), fmt.Errorf("read integration callback body: %T", err))
 	}
-	logpkg.Error(r.Context(), fmt.Errorf("read integration callback body: %w", err))
 	apierror.Write(w, openapi.ErrorCodeInvalidRequest, "invalid request body")
 	return nil, false
 }

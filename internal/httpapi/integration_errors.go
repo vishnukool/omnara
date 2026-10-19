@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/omnara-ai/omnara/internal/errutil"
 	"github.com/omnara-ai/omnara/internal/integration/discord"
 	"github.com/omnara-ai/omnara/internal/integration/github"
 	logpkg "github.com/omnara-ai/omnara/observability/wideevent"
 )
 
-// Credential workflows can return URLs, response bodies or database details containing
-// secrets. Log provider diagnostics and error types without arbitrary error text.
 func logIntegrationError(ctx context.Context, operation string, err error) {
 	var githubErr *github.APIError
 	var discordErr *discord.APIError
@@ -24,7 +23,7 @@ func logIntegrationError(ctx context.Context, operation string, err error) {
 		diagnostic = discordErr
 	case errors.Is(err, context.DeadlineExceeded):
 		diagnostic = context.DeadlineExceeded
-	case errors.Is(err, context.Canceled):
+	case errutil.OnlyMatches(err, context.Canceled):
 		diagnostic = context.Canceled
 	case errors.As(err, &sqlErr):
 		diagnostic = fmt.Errorf("database error (SQLSTATE %s)", sqlErr.SQLState())

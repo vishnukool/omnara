@@ -14,14 +14,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/omnara-ai/omnara/internal/integration/github"
 	"github.com/omnara-ai/omnara/internal/integrationdefinition"
 	"github.com/omnara-ai/omnara/internal/secrets"
@@ -394,16 +395,33 @@ func TestGitHubHTTPIntakeRejectsUnverifiedOrUncommitted(t *testing.T) {
 func TestGitHubHTTPIntakeTelemetrySeparatesCallerCancellationFromFailure(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name          string
-		callerCancels bool
-		status        float64
-		level         string
-		errorMessage  any
+		name         string
+		commit       func(context.Context, context.CancelFunc) error
+		status       float64
+		level        string
+		errorMessage any
 	}{
-		{name: "caller cancellation", callerCancels: true, status: 499, level: "info"},
+		{
+			name: "caller cancellation", status: 499, level: "info",
+			commit: func(ctx context.Context, cancel context.CancelFunc) error {
+				cancel()
+				return ctx.Err()
+			},
+		},
 		{
 			name: "storage failure", status: http.StatusServiceUnavailable, level: "error",
 			errorMessage: "GitHub intake: unclassified error (*errors.errorString)",
+			commit: func(context.Context, context.CancelFunc) error {
+				return errors.New("private-key webhook-secret")
+			},
+		},
+		{
+			name: "caller cancellation joined with storage failure", status: http.StatusServiceUnavailable, level: "error",
+			errorMessage: "GitHub intake: database error (SQLSTATE 08006)",
+			commit: func(ctx context.Context, cancel context.CancelFunc) error {
+				cancel()
+				return errors.Join(ctx.Err(), &pgconn.PgError{Code: "08006", Message: "private-key webhook-secret"})
+			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -411,13 +429,7 @@ func TestGitHubHTTPIntakeTelemetrySeparatesCallerCancellationFromFailure(t *test
 			f := newGitHubIntakeFixture()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			f.commit = func(commitCtx context.Context) error {
-				if tc.callerCancels {
-					cancel()
-					return commitCtx.Err()
-				}
-				return errors.New("private-key webhook-secret")
-			}
+			f.commit = func(commitCtx context.Context) error { return tc.commit(commitCtx, cancel) }
 			events, logger := newRequestEventCapture()
 			handler := requestEvents(logger, nil, nil)(
 				&githubIntakeHandler{store: f, secrets: f, credentialIntegrations: f.credentialIntegrations})
@@ -436,56 +448,98 @@ func TestGitHubHTTPIntakeTelemetrySeparatesCallerCancellationFromFailure(t *test
 	}
 }
 
-func TestGitHubHTTPIntakeClosesConnectionAfterAbandoningSlowBody(t *testing.T) {
+func TestGitHubHTTPIntakeClosesConnectionAfterAbandoningBody(t *testing.T) {
 	t.Parallel()
-	f := newGitHubIntakeFixture()
-	events, logger := newRequestEventCapture()
-	h := requestEvents(logger, nil, nil)(
-		&githubIntakeHandler{store: f, secrets: f, credentialIntegrations: f.credentialIntegrations})
-	abandoned := make(chan struct{})
-	var served atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
-		defer cancel()
-		h.ServeHTTP(w, r.WithContext(ctx))
-		if served.Add(1) == 1 {
-			close(abandoned)
+	const trailer = "private-trailer-bytes"
+	malformedTrailer := "POST " + GitHubEventsPath + " HTTP/1.1\r\nHost: github.test\r\n" +
+		"X-Github-Hook-Installation-Target-Id: 123\r\nTransfer-Encoding: chunked\r\n\r\n" +
+		"2\r\n{}\r\n0\r\n" + trailer + "\r\n\r\n"
+	parsed, err := http.ReadRequest(bufio.NewReader(strings.NewReader(malformedTrailer)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(parsed.Body); err == nil || !strings.Contains(err.Error(), trailer) {
+		t.Fatalf("trailer read error must quote the trailer: %v", err)
+	}
+	wire := func(body string) string {
+		var raw strings.Builder
+		if err := githubIntakeRequest(t, newGitHubIntakeFixture(), body).Write(&raw); err != nil {
+			t.Fatal(err)
 		}
-	}))
-	defer server.Close()
-	conn, err := net.Dial("tcp", server.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+		return raw.String()
 	}
-	defer func() { _ = conn.Close() }()
-	var slow bytes.Buffer
-	if err := githubIntakeRequest(t, f, githubIntakeBody).Write(&slow); err != nil {
-		t.Fatal(err)
-	}
-	const withheld = 16
-	if _, err := conn.Write(slow.Bytes()[:slow.Len()-withheld]); err != nil {
-		t.Fatal(err)
-	}
-	<-abandoned
-	slowBodyEvent := decodeRequestEvent(t, events)
-	_, _ = conn.Write(slow.Bytes()[slow.Len()-withheld:])
-	responses := bufio.NewReader(conn)
-	first, err := http.ReadResponse(responses, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstBody, _ := io.ReadAll(first.Body)
-	if first.StatusCode != http.StatusBadRequest || !strings.Contains(string(firstBody), "invalid request body") {
-		t.Fatalf("slow body response: %d %s", first.StatusCode, firstBody)
-	}
-	_ = githubIntakeRequest(t, f, githubIntakeBody).Write(conn)
-	if second, err := http.ReadResponse(responses, nil); err == nil {
-		secondBody, _ := io.ReadAll(second.Body)
-		t.Fatalf("connection reused after an abandoned body: %d %s", second.StatusCode, secondBody)
-	}
-	message, _ := slowBodyEvent["error.message"].(string)
-	if !strings.HasSuffix(message, os.ErrDeadlineExceeded.Error()) {
-		t.Fatalf("slow body event: %+v", slowBodyEvent)
+	for _, tc := range []struct {
+		name     string
+		request  string
+		withheld int
+		timeout  time.Duration
+		status   int
+		message  string
+	}{
+		{
+			name: "slow body", request: wire(githubIntakeBody), withheld: 16, timeout: 100 * time.Millisecond,
+			status: http.StatusBadRequest, message: "read integration callback body: i/o timeout",
+		},
+		{
+			name:    "oversized body with a stalled remainder",
+			request: wire(strings.Repeat(" ", integrationstore.IntegrationInboxMaxPayloadBytes+64*1024)), withheld: 32 * 1024,
+			timeout: githubIntakeTimeout, status: http.StatusRequestEntityTooLarge,
+			message: "read integration callback body: request body too large",
+		},
+		{
+			name: "malformed trailer", request: malformedTrailer, timeout: githubIntakeTimeout,
+			status: http.StatusBadRequest, message: "read integration callback body: textproto.ProtocolError",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newGitHubIntakeFixture()
+			events, logger := newRequestEventCapture()
+			h := requestEvents(logger, nil, nil)(
+				&githubIntakeHandler{store: f, secrets: f, credentialIntegrations: f.credentialIntegrations})
+			abandoned := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(abandoned)
+				ctx, cancel := context.WithTimeout(r.Context(), tc.timeout)
+				defer cancel()
+				h.ServeHTTP(w, r.WithContext(ctx))
+			}))
+			defer server.Close()
+			conn, err := net.Dial("tcp", server.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.Close() }()
+			deadline := time.Now().Add(integrationIntakeTimeout / 2)
+			if err := conn.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(conn, tc.request[:len(tc.request)-tc.withheld]); err != nil {
+				t.Fatal(err)
+			}
+			responses := bufio.NewReader(conn)
+			response, err := http.ReadResponse(responses, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body, err := io.ReadAll(response.Body); err != nil || response.StatusCode != tc.status {
+				t.Fatalf("response: %d %s %v", response.StatusCode, body, err)
+			}
+			if _, err := responses.ReadByte(); !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
+				t.Fatalf("connection still open after abandoning the body: %v", err)
+			}
+			select {
+			case <-abandoned:
+			case <-time.After(time.Until(deadline)):
+				t.Fatal("handler did not return")
+			}
+			if event := decodeRequestEvent(t, events); event["error.message"] != tc.message {
+				t.Fatalf("event: %+v", event)
+			}
+			if strings.Contains(events.String(), trailer) {
+				t.Fatalf("request bytes leaked: %s", events.String())
+			}
+		})
 	}
 }
 
