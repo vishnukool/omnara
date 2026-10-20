@@ -62,7 +62,7 @@ func (l *RedisRateLimiter) Allow(ctx context.Context, key string, limit int, win
 	}
 	allowed, err := l.client.EvalInt(ctx, authRateLimitScript, []string{key}, limit, int(window/time.Millisecond))
 	if err != nil {
-		return fmt.Errorf("auth rate limit: %w", err)
+		return fmt.Errorf("rate limit: %w", err)
 	}
 	if allowed == 0 {
 		return ErrRateLimited

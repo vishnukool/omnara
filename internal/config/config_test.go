@@ -16,6 +16,8 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("OMNARA_EVENT_WEBHOOK_PER_ORG_CONCURRENCY", "")
 	t.Setenv("OMNARA_API_ADDR", "")
 	t.Setenv("OMNARA_LOG_LEVEL", "")
+	t.Setenv("OMNARA_API_RATE_LIMIT_PER_HOUR", "")
+	t.Setenv("OMNARA_API_RATE_LIMIT_BURST", "")
 	t.Setenv("OMNARA_ALLOW_INSECURE_DEV_DEFAULTS", "1")
 
 	cfg, err := Load()
@@ -23,6 +25,13 @@ func TestLoadUsesDefaults(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
+	if cfg.APIRateLimitPerHour != 0 || cfg.APIRateLimitBurst != 0 {
+		t.Fatalf(
+			"expected API rate limit off by default, got %d per hour with burst %d",
+			cfg.APIRateLimitPerHour,
+			cfg.APIRateLimitBurst,
+		)
+	}
 	if cfg.APIAddr != ":8080" {
 		t.Fatalf("expected default addr, got %q", cfg.APIAddr)
 	}
@@ -563,6 +572,28 @@ func TestValidateAPITrustedProxyCIDRs(t *testing.T) {
 	}
 	if err := cfg.ValidateAPI(); err == nil || !strings.Contains(err.Error(), "OMNARA_TRUSTED_PROXY_CIDRS") {
 		t.Fatalf("expected trusted proxy config error, got %v", err)
+	}
+}
+
+func TestValidateAPIRateLimit(t *testing.T) {
+	t.Setenv("OMNARA_ALLOW_INSECURE_DEV_DEFAULTS", "1")
+	cases := []struct{ perHour, burst, wantErr string }{
+		{perHour: "5000", burst: "500"},
+		{perHour: "0", burst: "0"},
+		{perHour: "-1", burst: "0", wantErr: "OMNARA_API_RATE_LIMIT_PER_HOUR"},
+		{perHour: "5000", burst: "-1", wantErr: "OMNARA_API_RATE_LIMIT_BURST"},
+	}
+	for _, tc := range cases {
+		t.Setenv("OMNARA_API_RATE_LIMIT_PER_HOUR", tc.perHour)
+		t.Setenv("OMNARA_API_RATE_LIMIT_BURST", tc.burst)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load %+v: %v", tc, err)
+		}
+		err = cfg.ValidateAPI()
+		if (tc.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Fatalf("validate %+v error = %v", tc, err)
+		}
 	}
 }
 
