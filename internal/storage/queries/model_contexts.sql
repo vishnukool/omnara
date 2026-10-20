@@ -79,3 +79,14 @@ SELECT (
 FROM model_call_contexts context
 WHERE context.project_id = sqlc.arg(project_id) AND context.agent_id = sqlc.arg(agent_id)
   AND context.id = sqlc.arg(model_call_context_id);
+
+-- name: ReadPreparedModelCallStatus :one
+SELECT EXISTS(
+    SELECT 1 FROM model_call_contexts c
+    JOIN agents a ON a.id=c.agent_id AND a.project_id=c.project_id
+    JOIN agent_runtime_locks r ON r.agent_id=c.agent_id AND r.id=c.runtime_lock_id
+    WHERE c.project_id=sqlc.arg(project_id) AND c.agent_id=sqlc.arg(agent_id)
+      AND c.id=sqlc.arg(context_id) AND c.runtime_lock_id=sqlc.arg(runtime_id)
+      AND c.state='started' AND c.operation_kind='normal' AND a.state='active'
+      AND r.cancel_requested_at IS NULL AND r.lease_expires_at>statement_timestamp()
+) AS executable;
