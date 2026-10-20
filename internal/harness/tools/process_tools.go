@@ -33,7 +33,6 @@ type runCommandAuthorization struct {
 	Command               string                   `json:"command"`
 	ShellSelector         processcmd.ShellSelector `json:"shell_selector"`
 	Cwd                   string                   `json:"cwd,omitempty"`
-	WaitMS                int                      `json:"wait_ms,omitempty"`
 	IOMode                processcmd.IOMode        `json:"io_mode"`
 	Detach                bool                     `json:"detach,omitempty"`
 }
@@ -55,7 +54,6 @@ type processObservationRequest struct {
 	ProcessID string                 `json:"process_id,omitempty"`
 	Mode      processObservationMode `json:"mode"`
 	Cursor    *int64                 `json:"cursor,omitempty"`
-	MaxBytes  int                    `json:"max_bytes,omitempty"`
 	WaitMS    int                    `json:"wait_ms,omitempty"`
 }
 
@@ -68,7 +66,6 @@ func runCommandAuthorizationInput(
 		Command:               resolved.Command,
 		ShellSelector:         resolved.Selector,
 		Cwd:                   resolved.Cwd,
-		WaitMS:                resolved.WaitMs,
 		IOMode:                resolved.IOMode,
 		Detach:                resolved.Detach,
 	})
@@ -375,7 +372,21 @@ func observeProcess(
 		}
 		return completeInTransaction(content), nil
 	}
-	payload, err := processObservationActionPayload(request)
+	var wait processaction.OutputWait
+	if id, err := decodeProcessID(request.ProcessID); err == nil {
+		spec, found, err := call.Reader.ProcessExecutionSpec(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			wait, _ = spec.AgentOutputWait()
+		}
+	}
+	if request.Cursor != nil {
+		// An explicit cursor pages through output, so return one contiguous page.
+		wait.HeadBytes = 0
+	}
+	payload, err := processObservationActionPayload(request, wait)
 	if err != nil {
 		return nil, fmt.Errorf("marshal process observation payload: %w", err)
 	}
@@ -392,11 +403,13 @@ func observeProcess(
 
 func processObservationActionPayload(
 	request processObservationRequest,
+	wait processaction.OutputWait,
 ) (json.RawMessage, error) {
 	return marshalJSON(processaction.ReadPayload{
-		Cursor:   request.Cursor,
-		MaxBytes: request.MaxBytes,
-		WaitMS:   request.WaitMS,
+		Cursor:     request.Cursor,
+		MaxBytes:   processaction.AgentOutputBytes,
+		WaitMS:     request.WaitMS,
+		OutputWait: wait,
 	})
 }
 
@@ -734,7 +747,6 @@ func resolveProcessObservationRequest(
 	var parsed struct {
 		ProcessID string `json:"process_id,omitempty"`
 		Cursor    *int64 `json:"cursor,omitempty"`
-		MaxBytes  *int   `json:"max_bytes,omitempty"`
 		WaitMs    *int   `json:"wait_ms,omitempty"`
 	}
 	if len(raw) != 0 {
@@ -770,18 +782,6 @@ func resolveProcessObservationRequest(
 		}
 		cursor := *parsed.Cursor
 		input.Cursor = &cursor
-	}
-	if parsed.MaxBytes != nil {
-		if *parsed.MaxBytes <= 0 {
-			return input, errors.New("max_bytes must be positive")
-		}
-		if *parsed.MaxBytes > processaction.MaxObservationBytes {
-			return input, fmt.Errorf(
-				"max_bytes must be <= %d",
-				processaction.MaxObservationBytes,
-			)
-		}
-		input.MaxBytes = *parsed.MaxBytes
 	}
 	if parsed.WaitMs != nil {
 		if *parsed.WaitMs <= 0 {

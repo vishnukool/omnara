@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Keep these markers to one byte: wait_ms returns on the first nonempty output
-// snapshot, which need not contain an entire multi-byte message.
+// Keep these markers to one byte: daemons before 0.2.9 return a wait on the
+// first nonempty output snapshot, which need not contain a whole message.
 const (
 	parallelServiceE2EReadyMarker    = "R"
 	parallelServiceE2EReleasedMarker = "G"
@@ -120,7 +120,6 @@ func TestServiceE2EParallelProcessActionsRecoverFIFOAfterDaemonRestart(t *testin
 						"command": parallelServiceE2ECommand(i),
 						"shell":   "sh",
 						"cwd":     "/work",
-						"wait_ms": 10000,
 					},
 				})
 			}
@@ -251,7 +250,7 @@ func TestServiceE2EParallelProcessActionsRecoverFIFOAfterDaemonRestart(t *testin
 				if !ok {
 					return
 				}
-				if result.Done == nil || !*result.Done {
+				if result.State != "exited" && result.State != "failed" && result.State != "killed" {
 					failModelRequest(
 						w,
 						http.StatusBadRequest,
@@ -385,7 +384,6 @@ func serviceE2EReadProcessCall(
 ) fakeOpenAIFunctionCall {
 	args := map[string]any{
 		"process_id": processID,
-		"max_bytes":  4096,
 	}
 	if waitMS > 0 {
 		args["wait_ms"] = waitMS
