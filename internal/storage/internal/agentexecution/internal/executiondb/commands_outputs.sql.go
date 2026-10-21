@@ -50,17 +50,20 @@ func (q *Queries) CreateExecutionCheckpoint(ctx context.Context, db DBTX, arg Cr
 }
 
 const createExecutionOutput = `-- name: CreateExecutionOutput :one
-INSERT INTO model_outputs(agent_id,model_call_context_id,served_provider_model_slug,stop_reason,provider_replay,created_at)
-VALUES($1,$2,$3,$4,$5::jsonb,statement_timestamp())
+INSERT INTO model_outputs(agent_id,model_call_context_id,served_provider_model_slug,stop_reason,provider_replay,
+ provider_replay_prefix_digest,created_at)
+VALUES($1,$2,$3,$4,$5::jsonb,
+ $6::text,statement_timestamp())
 RETURNING id,created_at
 `
 
 type CreateExecutionOutputParams struct {
-	AgentID     uuid.UUID
-	ContextID   uuid.UUID
-	ServedModel string
-	StopReason  string
-	Replay      *json.RawMessage
+	AgentID            uuid.UUID
+	ContextID          uuid.UUID
+	ServedModel        string
+	StopReason         string
+	Replay             *json.RawMessage
+	ReplayPrefixDigest *string
 }
 
 type CreateExecutionOutputRow struct {
@@ -75,6 +78,7 @@ func (q *Queries) CreateExecutionOutput(ctx context.Context, db DBTX, arg Create
 		arg.ServedModel,
 		arg.StopReason,
 		arg.Replay,
+		arg.ReplayPrefixDigest,
 	)
 	var i CreateExecutionOutputRow
 	err := row.Scan(&i.ID, &i.CreatedAt)

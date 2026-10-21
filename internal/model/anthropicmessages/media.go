@@ -73,6 +73,10 @@ func (c Client) prepareWithinRequestBodyLimit(
 			return model.PreparedRequest{}, err
 		}
 		if limit <= 0 || len(prepared.Body) <= limit {
+			prepared.ProviderReplayPrefixDigest, err = requestPrefixDigest(prepared.Body)
+			if err != nil {
+				return model.PreparedRequest{}, route.SetupError{Err: err}
+			}
 			logent.ModelRequestMediaOmittedForBodyLimit(
 				ctx,
 				len(omittedArtifacts),

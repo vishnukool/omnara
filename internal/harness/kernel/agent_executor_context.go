@@ -314,6 +314,7 @@ func (e AgentExecutor) executeModelStep(
 		)
 	}
 	envelope.InputFingerprint = prepared.InputFingerprint
+	envelope.ProviderReplayPrefixDigest = prepared.ProviderReplayPrefixDigest
 	step := modelStep{
 		Context:             claim.Context,
 		Bundle:              bundle,

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnara-ai/omnara/internal/modelenvelope"
 	"github.com/omnara-ai/omnara/internal/storage/internal/agentexecution/internal/executiondb"
+	"github.com/omnara-ai/omnara/internal/storage/internal/storeutil"
 	"github.com/omnara-ai/omnara/internal/storage/storeerr"
 )
 
@@ -146,12 +147,15 @@ func (h *Handle) AcceptOutput(ctx context.Context, input AcceptOutputInput) (Acc
 			return AcceptedOutput{}, err
 		}
 		var replay *json.RawMessage
+		var replayPrefixDigest *string
 		if len(input.Response.ProviderReplay) > 0 {
 			replay = &input.Response.ProviderReplay
+			replayPrefixDigest = storeutil.TextFromEmpty(input.Response.ProviderReplayPrefixDigest)
 		}
 		output, err := q.CreateExecutionOutput(ctx, h.unit.DB(), executiondb.CreateExecutionOutputParams{
 			AgentID: h.route.AgentID, ContextID: input.ContextID, ServedModel: input.Response.ServedProviderModelSlug,
-			StopReason: string(input.Response.Normalized.StopReason), Replay: replay})
+			StopReason: string(input.Response.Normalized.StopReason), Replay: replay,
+			ReplayPrefixDigest: replayPrefixDigest})
 		if err != nil {
 			return AcceptedOutput{}, err
 		}

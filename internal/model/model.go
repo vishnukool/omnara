@@ -161,13 +161,14 @@ type PrepareInput struct {
 type PreparedRequest struct {
 	// Body is the exact JSON byte sequence authorized by Prepare and passed to
 	// the provider transport. Respond must not rebuild or mutate it.
-	Body                   json.RawMessage
-	InputFingerprint       string
-	InputTokenEstimate     int
-	InputBudget            InputBudgetAssessment
-	MaxOutputTokens        int
-	RenderedMedia          []modelcontext.RenderedMedia
-	UsesProviderInputUsage bool
+	Body                       json.RawMessage
+	InputFingerprint           string
+	ProviderReplayPrefixDigest string
+	InputTokenEstimate         int
+	InputBudget                InputBudgetAssessment
+	MaxOutputTokens            int
+	RenderedMedia              []modelcontext.RenderedMedia
+	UsesProviderInputUsage     bool
 }
 
 type PrepareForSendInput struct {

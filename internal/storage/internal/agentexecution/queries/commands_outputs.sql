@@ -1,6 +1,8 @@
 -- name: CreateExecutionOutput :one
-INSERT INTO model_outputs(agent_id,model_call_context_id,served_provider_model_slug,stop_reason,provider_replay,created_at)
-VALUES(sqlc.arg(agent_id),sqlc.arg(context_id),sqlc.arg(served_model),sqlc.arg(stop_reason),sqlc.narg(replay)::jsonb,statement_timestamp())
+INSERT INTO model_outputs(agent_id,model_call_context_id,served_provider_model_slug,stop_reason,provider_replay,
+ provider_replay_prefix_digest,created_at)
+VALUES(sqlc.arg(agent_id),sqlc.arg(context_id),sqlc.arg(served_model),sqlc.arg(stop_reason),sqlc.narg(replay)::jsonb,
+ sqlc.narg(replay_prefix_digest)::text,statement_timestamp())
 RETURNING id,created_at;
 
 -- name: FindExecutionOutput :one

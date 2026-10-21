@@ -52,11 +52,17 @@ func (p protocol) BuildRequest(ctx context.Context, input model.PrepareInput) (j
 		input.Context,
 		input.Policy.CacheRetention,
 	))
+	tools := buildTools(input.Context.ToolSpecs, control)
+	prefix, err := newPrefixHasher(modelcontext.ProjectedSystemPrompt(input.Context), tools)
+	if err != nil {
+		return nil, err
+	}
 	messages, err := buildMessages(
 		input.Context,
 		input.Policy,
 		model.ProviderReplayIdentityForClient(c.ModelProviderConfigID, c),
 		control,
+		prefix,
 	)
 	if err != nil {
 		return nil, err
@@ -66,7 +72,7 @@ func (p protocol) BuildRequest(ctx context.Context, input model.PrepareInput) (j
 		MaxTokens: maxTokens,
 		System:    systemContent(input.Context, control),
 		Messages:  messages,
-		Tools:     buildTools(input.Context.ToolSpecs, control),
+		Tools:     tools,
 	}
 	if len(payload.Tools) > 0 {
 		payload.ToolChoice = map[string]string{"type": "auto"}
@@ -238,6 +244,7 @@ func buildMessages(
 	policy model.RequestPolicy,
 	replayIdentity modelenvelope.ProviderReplayIdentity,
 	control *CacheControl,
+	prefix *prefixHasher,
 ) ([]message, error) {
 	history, err := modelcontext.CanonicalHistory(bundle)
 	if err != nil {
@@ -255,18 +262,32 @@ func buildMessages(
 			Text:         modelcontext.ProjectedCheckpointContent(*checkpoint),
 			CacheControl: control,
 		}
-		messages = appendMessageBlocks(messages, anthropicRoleUser, []any{block})
+		messages, err = appendPrefixedBlocks(messages, prefix, anthropicRoleUser, []any{block})
+		if err != nil {
+			return nil, err
+		}
 	}
 	usedIDs := map[string]bool{}
 	historyAdded := false
 	for _, entry := range history {
 		if entry.Message.Role == modelprotocol.RoleAssistant {
+			// History that opens with an assistant turn is sent after a
+			// "Continue." user message, so that message is part of its prefix.
+			opensHistory := prefix.empty()
+			turnPrefix := prefix
+			if opensHistory {
+				turnPrefix, err = prefix.withOpeningBlocks(anthropicRoleUser, continueBlocks())
+				if err != nil {
+					return nil, fmt.Errorf("digest anthropic-messages prefix: %w", err)
+				}
+			}
 			assistantBlocks, toolUseIDByCallID, buildErr := assistantTurnForEntry(
 				entry.Message,
 				entry.AssistantContent,
 				entry.ToolResults,
 				replayIdentity,
 				policy,
+				turnPrefix.digest(),
 				usedIDs,
 			)
 			if buildErr != nil {
@@ -274,11 +295,16 @@ func buildMessages(
 			}
 			if len(assistantBlocks) > 0 {
 				historyAdded = true
-				messages = appendMessageBlocks(
+				prefix = turnPrefix
+				messages, err = appendPrefixedBlocks(
 					messages,
+					prefix,
 					anthropicRoleAssistant,
 					assistantBlocks,
 				)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if len(entry.ToolResults) == 0 {
 				continue
@@ -298,13 +324,19 @@ func buildMessages(
 					IsError:   result.Outcome == executionstore.ToolResultOutcomeFailed,
 				})
 			}
-			messages = appendMessageBlocks(messages, anthropicRoleUser, resultContent)
+			messages, err = appendPrefixedBlocks(messages, prefix, anthropicRoleUser, resultContent)
+			if err != nil {
+				return nil, err
+			}
 			historyAdded = true
 			continue
 		}
 		blocks := messageBlocksFromParts(entry.Message.Content, bundle.ResolvedMedia)
 		if len(blocks) > 0 {
-			messages = appendMessageBlocks(messages, anthropicRoleUser, blocks)
+			messages, err = appendPrefixedBlocks(messages, prefix, anthropicRoleUser, blocks)
+			if err != nil {
+				return nil, err
+			}
 			historyAdded = true
 		}
 	}
@@ -312,17 +344,28 @@ func buildMessages(
 		messages = markLastMessageCacheBreakpoint(messages, control)
 	}
 	if len(messages) > 0 && messages[0].Role == anthropicRoleAssistant {
-		messages = append(
-			[]message{{Role: anthropicRoleUser, Content: []any{textBlock{Type: "text", Text: "Continue."}}}},
-			messages...)
+		messages = append([]message{{Role: anthropicRoleUser, Content: continueBlocks()}}, messages...)
 	}
 	if len(messages) == 0 {
-		messages = append(
-			messages,
-			message{Role: anthropicRoleUser, Content: []any{textBlock{Type: "text", Text: "Continue."}}},
-		)
+		messages = append(messages, message{Role: anthropicRoleUser, Content: continueBlocks()})
 	}
 	return messages, nil
+}
+
+func continueBlocks() []any {
+	return []any{textBlock{Type: "text", Text: "Continue."}}
+}
+
+func appendPrefixedBlocks(
+	messages []message,
+	prefix *prefixHasher,
+	role anthropicRole,
+	blocks []any,
+) ([]message, error) {
+	if err := prefix.appendBlocks(role, blocks); err != nil {
+		return nil, fmt.Errorf("digest anthropic-messages prefix: %w", err)
+	}
+	return appendMessageBlocks(messages, role, blocks), nil
 }
 
 func markLastMessageCacheBreakpoint(messages []message, control *CacheControl) []message {
@@ -436,6 +479,7 @@ func assistantTurnForEntry(
 	group []modelcontext.ToolResultRef,
 	replayIdentity modelenvelope.ProviderReplayIdentity,
 	policy model.RequestPolicy,
+	prefixDigest string,
 	usedIDs map[string]bool,
 ) ([]any, map[string]string, error) {
 	if policy.AllowsProviderReplay(source.Sequence) {
@@ -443,6 +487,7 @@ func assistantTurnForEntry(
 			source,
 			content,
 			replayIdentity,
+			prefixDigest,
 			usedIDs,
 		); ok {
 			return blocks, toolUseIDs, nil
@@ -473,9 +518,10 @@ func completeAnthropicReplay(
 	source modelcontext.Message,
 	content []modelcontext.AssistantContentEntry,
 	target modelenvelope.ProviderReplayIdentity,
+	prefixDigest string,
 	usedIDs map[string]bool,
 ) ([]any, map[string]string, bool) {
-	if !source.ProviderReplaySource.Matches(target) {
+	if !anthropicReplayCompatible(source.ProviderReplaySource, target) {
 		return nil, nil, false
 	}
 	var rawBlocks []json.RawMessage
@@ -490,14 +536,51 @@ func completeAnthropicReplay(
 	if !ok || !sameAnthropicSemantics(replayed, canonical) {
 		return nil, nil, false
 	}
+	// Thinking stays valid only while the prefix it was produced under is
+	// unchanged. Outputs recorded before prefix digests existed keep replaying
+	// and rely on replay-rejection recovery.
+	keepThinking := source.ProviderReplayPrefixDigest == "" ||
+		source.ProviderReplayPrefixDigest == prefixDigest
 	blocks := make([]any, 0, len(rawBlocks))
 	for _, raw := range rawBlocks {
+		if !keepThinking && isAnthropicThinkingBlock(raw) {
+			continue
+		}
 		blocks = append(blocks, raw)
 	}
 	for id := range replayToolIDs {
 		usedIDs[id] = true
 	}
 	return blocks, replayToolIDs, true
+}
+
+func isAnthropicThinkingBlock(raw json.RawMessage) bool {
+	var block struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &block) != nil {
+		return false
+	}
+	return block.Type == "thinking" || block.Type == "redacted_thinking"
+}
+
+// anthropicReplayCompatible keeps replay across Claude model changes within one
+// provider config: the API drops thinking the new model cannot read, unbilled,
+// and keeps what it can, so stripping it here would only lose reasoning.
+// Other anthropic-messages models keep the exact identity match.
+func anthropicReplayCompatible(source, target modelenvelope.ProviderReplayIdentity) bool {
+	if source.Matches(target) {
+		return true
+	}
+	sameModel := target
+	sameModel.RequestedProviderModelSlug = source.RequestedProviderModelSlug
+	return source.Matches(sameModel) &&
+		isClaudeModelSlug(source.RequestedProviderModelSlug) &&
+		isClaudeModelSlug(target.RequestedProviderModelSlug)
+}
+
+func isClaudeModelSlug(slug string) bool {
+	return strings.Contains(strings.ToLower(slug), "claude")
 }
 
 type anthropicReplaySemantic struct {

@@ -171,6 +171,7 @@ SELECT event.id,
        context.agent_config_id, context.configured_model_revision_id,
        coalesce(context.operation_kind = 'normal' AND context.state = 'succeeded', false)::boolean AS is_successful_normal_call,
        output.provider_replay,
+       coalesce(output.provider_replay_prefix_digest, '')::text AS provider_replay_prefix_digest,
        coalesce(output.stop_reason, '') AS stop_reason,
        CASE
          WHEN event.event_kind = 'agent_input' AND input.input_kind = 'config_change' AND event.sequence > 1 THEN
@@ -229,7 +230,7 @@ WHERE scoped_agent.project_id = sqlc.arg(project_id)
 GROUP BY event.id, event.sequence, event.created_at, event.event_kind,
   event.model_output_id, output.model_call_context_id, revision.model_provider_config_id,
   revision.provider_model_slug, context.api_format, context.api_variant,
-  output.provider_replay, output.stop_reason, input.input_kind,
+  output.provider_replay, output.provider_replay_prefix_digest, output.stop_reason, input.input_kind,
   context.input_fingerprint, context.input_tokens_total, context.uncached_input_tokens, context.cache_read_input_tokens,
   context.cache_write_input_tokens, context.output_tokens_total, context.reasoning_output_tokens,
   context.input_event_sequence, context.agent_config_id, context.configured_model_revision_id,

@@ -102,20 +102,21 @@ func (m RenderedMedia) InputModality() string {
 }
 
 type Message struct {
-	InputFingerprint          string                               `json:"-"`
-	InputEventSequence        int64                                `json:"-"`
-	AgentConfigID             uuid.UUID                            `json:"-"`
-	ConfiguredModelRevisionID uuid.UUID                            `json:"-"`
-	Usage                     modelenvelope.Usage                  `json:"-"`
-	ID                        string                               `json:"-"`
-	AgentInputID              string                               `json:"-"`
-	ModelCallContextID        string                               `json:"-"`
-	Role                      modelprotocol.MessageRole            `json:"role"`
-	Sequence                  int64                                `json:"sequence,omitempty"`
-	Content                   json.RawMessage                      `json:"content"`
-	ProviderReplay            json.RawMessage                      `json:"-"`
-	ProviderReplaySource      modelenvelope.ProviderReplayIdentity `json:"-"`
-	StopReason                modelenvelope.StopReason             `json:"-"`
+	InputFingerprint           string                               `json:"-"`
+	InputEventSequence         int64                                `json:"-"`
+	AgentConfigID              uuid.UUID                            `json:"-"`
+	ConfiguredModelRevisionID  uuid.UUID                            `json:"-"`
+	Usage                      modelenvelope.Usage                  `json:"-"`
+	ID                         string                               `json:"-"`
+	AgentInputID               string                               `json:"-"`
+	ModelCallContextID         string                               `json:"-"`
+	Role                       modelprotocol.MessageRole            `json:"role"`
+	Sequence                   int64                                `json:"sequence,omitempty"`
+	Content                    json.RawMessage                      `json:"content"`
+	ProviderReplay             json.RawMessage                      `json:"-"`
+	ProviderReplaySource       modelenvelope.ProviderReplayIdentity `json:"-"`
+	ProviderReplayPrefixDigest string                               `json:"-"`
+	StopReason                 modelenvelope.StopReason             `json:"-"`
 }
 
 type ToolSpec struct {
