@@ -12,12 +12,6 @@ import (
 	"sort"
 )
 
-// Claude binds each thinking block to the conversation prefix that produced it:
-// the system prompt, the non-deferred tools as a name-keyed set, and every
-// message before the block. A prefix digest records that prefix as sent so a
-// later request can tell, before sending, which replayed thinking blocks the
-// API would reject. Cache markers are not part of the binding, so they are
-// excluded.
 type prefixHasher struct {
 	system      string
 	tools       []toolDefinition
@@ -71,8 +65,6 @@ func (h *prefixHasher) appendBlocks(role anthropicRole, blocks []any) error {
 	return nil
 }
 
-// withOpeningBlocks returns a separate hasher for an empty prefix followed by
-// one opening message; h is left unchanged.
 func (h *prefixHasher) withOpeningBlocks(role anthropicRole, blocks []any) (*prefixHasher, error) {
 	if !h.empty() {
 		return nil, errors.New("prefix already has messages")
@@ -134,8 +126,6 @@ func decodePrefixJSON(raw json.RawMessage) (any, error) {
 	return value, nil
 }
 
-// requestPrefixDigest digests the full prefix of a prepared request body: the
-// prefix every thinking block in the response is bound to.
 func requestPrefixDigest(body json.RawMessage) (string, error) {
 	var request struct {
 		System   json.RawMessage  `json:"system"`

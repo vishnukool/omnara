@@ -271,8 +271,6 @@ func buildMessages(
 	historyAdded := false
 	for _, entry := range history {
 		if entry.Message.Role == modelprotocol.RoleAssistant {
-			// History that opens with an assistant turn is sent after a
-			// "Continue." user message, so that message is part of its prefix.
 			opensHistory := prefix.empty()
 			turnPrefix := prefix
 			if opensHistory {
@@ -536,9 +534,6 @@ func completeAnthropicReplay(
 	if !ok || !sameAnthropicSemantics(replayed, canonical) {
 		return nil, nil, false
 	}
-	// Thinking stays valid only while the prefix it was produced under is
-	// unchanged. Outputs recorded before prefix digests existed keep replaying
-	// and rely on replay-rejection recovery.
 	keepThinking := source.ProviderReplayPrefixDigest == "" ||
 		source.ProviderReplayPrefixDigest == prefixDigest
 	blocks := make([]any, 0, len(rawBlocks))
@@ -564,10 +559,6 @@ func isAnthropicThinkingBlock(raw json.RawMessage) bool {
 	return block.Type == "thinking" || block.Type == "redacted_thinking"
 }
 
-// anthropicReplayCompatible keeps replay across Claude model changes within one
-// provider config: the API drops thinking the new model cannot read, unbilled,
-// and keeps what it can, so stripping it here would only lose reasoning.
-// Other anthropic-messages models keep the exact identity match.
 func anthropicReplayCompatible(source, target modelenvelope.ProviderReplayIdentity) bool {
 	if source.Matches(target) {
 		return true

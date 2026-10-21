@@ -55,8 +55,6 @@ func (c *thinkingConversation) prepare(checkpoint *modelcontext.CheckpointRef) m
 	return prepared
 }
 
-// respond prepares the next request and records a signed thinking output bound
-// to that request's prefix, as the kernel stores a successful response.
 func (c *thinkingConversation) respond(signature, answer string) model.PreparedRequest {
 	c.t.Helper()
 	prepared := c.prepare(nil)

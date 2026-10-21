@@ -1,8 +1,5 @@
 -- +goose Up
 
--- Claude binds replayed thinking to the request prefix that produced it. The
--- digest of that prefix lets later requests replay thinking only while the
--- prefix is unchanged.
 ALTER TABLE model_outputs
     ADD COLUMN provider_replay_prefix_digest text,
     ADD CONSTRAINT model_outputs_provider_replay_prefix_digest CHECK (
