@@ -358,7 +358,7 @@ func TestInteractionToolAlwaysAskUsesOriginalAuthorizationInput(t *testing.T) {
 		ctx,
 		turn,
 		changed,
-		f.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: f.toolCallID(t, ctx, call.ID)},
 		implementation.handler,
 	)
 	require.ErrorIs(

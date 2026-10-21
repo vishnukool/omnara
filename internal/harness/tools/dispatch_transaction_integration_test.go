@@ -423,7 +423,7 @@ func TestToolHandlerPhaseOrdering(t *testing.T) {
 		ctx,
 		turn,
 		transactional,
-		fixture.toolCallID(t, ctx, transactional.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, transactional.ID)},
 		toolHandler{Transactional: func(
 			context.Context,
 			transactionalToolContext,
@@ -581,7 +581,7 @@ func TestCompletedAsyncAdmitsBackgroundBeforeReleasingCapacity(t *testing.T) {
 		WithAsyncExecutionScope(ctx, scope),
 		fixture.turn(),
 		call,
-		fixture.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, call.ID)},
 		toolHandler{
 			Async: func(
 				context.Context,
@@ -646,7 +646,7 @@ func TestTransactionalCompletionSkipsAsync(t *testing.T) {
 		ctx,
 		fixture.turn(),
 		call,
-		fixture.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, call.ID)},
 		toolHandler{
 			Transactional: func(
 				context.Context,
@@ -709,7 +709,7 @@ func TestTransactionalFailureRollsBackAndSkipsLaterPhases(t *testing.T) {
 		ctx,
 		fixture.turn(),
 		call,
-		fixture.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, call.ID)},
 		toolHandler{
 			Transactional: func(
 				context.Context,
@@ -783,7 +783,7 @@ func TestTransactionalPanicRollsBackAndReleasesReservedAsyncCapacity(t *testing.
 		scopedCtx,
 		fixture.turn(),
 		call,
-		fixture.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, call.ID)},
 		toolHandler{
 			Transactional: func(
 				context.Context,
@@ -918,7 +918,7 @@ func TestAsyncSuccessRemainsAuthoritativeWhenExecutionContextEnds(t *testing.T) 
 		WithAsyncExecutionScope(ctx, scope),
 		fixture.turn(),
 		call,
-		fixture.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, call.ID)},
 		toolHandler{Async: func(
 			context.Context,
 			asyncToolContext,
@@ -1091,7 +1091,7 @@ func TestAsyncPanicFailsOnlyItsToolAndReleasesCapacity(t *testing.T) {
 		WithAsyncExecutionScope(ctx, scope),
 		fixture.turn(),
 		call,
-		fixture.toolCallID(t, ctx, call.ID),
+		executionstore.ToolCallRecord{ID: fixture.toolCallID(t, ctx, call.ID)},
 		toolHandler{Async: func(
 			context.Context,
 			asyncToolContext,
@@ -1156,7 +1156,7 @@ func dispatchTestAsyncHandler(
 		WithAsyncExecutionScope(ctx, scope),
 		turn,
 		call,
-		toolCallID,
+		executionstore.ToolCallRecord{ID: toolCallID},
 		handler,
 	)
 	if err != nil {
